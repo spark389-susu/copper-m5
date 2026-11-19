@@ -10,7 +10,7 @@
 // agent with its own instructions and tools, and the Refund agent can hand it
 // back. The agent that ends the turn answers the next message too.
 import { hasToolCall, stepCountIs } from "ai";
-import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
+import { callStream, THOUGHT_SUMMARIES, traceTurn } from "@/lib/ai/call";
 import { createLive, type Live } from "@/lib/ai/live";
 import {
   COPPER_HANDOFF,
@@ -191,33 +191,41 @@ export async function askCopper({
   }
 
   // Read the stream in the background, so the panel gets the first update now.
+  // The whole turn is one Langfuse trace: each agent's model calls and tool
+  // calls (and any handoff between agents) hang under it.
   void (async () => {
     try {
-      if (!useTools) {
-        // Without tools, send no instructions either: "always use your
-        // tools" with no tools makes the model answer with nothing.
-        await follow(
-          "copper",
-          callStream(
-            { module: 2, feature: "ask-copper" },
-            { messages, providerOptions: THOUGHT_SUMMARIES },
-          ),
-        );
-      } else {
-        let current = first;
-        for (let handoffs = 0; ; handoffs++) {
-          const next = await follow(
-            current,
-            agentCall(current, messages, desk),
-          );
-          if (!next || next === current || handoffs >= MAX_HANDOFFS) break;
-          progress.steps.push({ type: "handoff", from: current, to: next });
-          progress.agent = current = next;
-          progress.reply = "";
-          call++;
-          update(snapshot());
-        }
-      }
+      await traceTurn(
+        "ask-copper-turn",
+        { module: 4, useTools, support: Boolean(desk), firstAgent: first },
+        async () => {
+          if (!useTools) {
+            // Without tools, send no instructions either: "always use your
+            // tools" with no tools makes the model answer with nothing.
+            await follow(
+              "copper",
+              callStream(
+                { module: 2, feature: "ask-copper" },
+                { messages, providerOptions: THOUGHT_SUMMARIES },
+              ),
+            );
+            return;
+          }
+          let current = first;
+          for (let handoffs = 0; ; handoffs++) {
+            const next = await follow(
+              current,
+              agentCall(current, messages, desk),
+            );
+            if (!next || next === current || handoffs >= MAX_HANDOFFS) break;
+            progress.steps.push({ type: "handoff", from: current, to: next });
+            progress.agent = current = next;
+            progress.reply = "";
+            call++;
+            update(snapshot());
+          }
+        },
+      );
       progress.status = "done";
       if (!progress.reply.trim()) progress.reply = SORRY;
     } catch {

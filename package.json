@@ -19,7 +19,12 @@
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.93",
+    "@ai-sdk/otel": "1.0.137",
     "@hookform/resolvers": "5.9.1",
+    "@langfuse/otel": "6.1.1",
+    "@langfuse/tracing": "6.1.1",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/sdk-node": "0.218.0",
     "@streamdown/cjk": "1.0.4",
     "@streamdown/code": "2.0.0",
     "@streamdown/math": "1.0.3",

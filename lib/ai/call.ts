@@ -1,4 +1,5 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { startActiveObservation } from "@langfuse/tracing";
 import { embedMany, generateText, Output, streamText } from "ai";
 import type { z } from "zod";
 import {
@@ -12,7 +13,10 @@ import { costUsd } from "@/lib/ai/pricing";
 
 // Every model call in the app goes through this file, so each one is logged
 // with its tokens, cost and how long it took. The log goes to the terminal
-// running the app, as a line starting "[ai_calls]".
+// running the app, as a line starting "[ai_calls]". When the Langfuse keys are
+// set (lib/ai/langfuse.ts), each call is also a trace in Langfuse: one span per
+// call, carrying the same tokens, cost and latency, with the model call and
+// any tool calls nested inside it.
 
 export class AiNotConfiguredError extends Error {
   constructor() {
@@ -73,6 +77,57 @@ async function logCall(row: AiCallRow): Promise<void> {
 
 type Usage = { inputTokens?: number; outputTokens?: number };
 
+/** What the Langfuse span for a call shows, next to its input and output. */
+function spanDetails(row: AiCallRow) {
+  return {
+    model: row.model,
+    metadata: {
+      module: row.module,
+      feature: row.feature,
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+      cost_usd: row.cost_usd,
+      latency_ms: row.latency_ms,
+    },
+  };
+}
+
+type Span = Parameters<Parameters<typeof startActiveObservation>[1]>[0];
+
+/** Marks a Langfuse span as failed. */
+function failSpan(span: Span, error: unknown) {
+  span.update({
+    level: "ERROR",
+    statusMessage: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * Groups everything inside `run` into one Langfuse trace: use it around a
+ * whole agent turn, so each agent's model calls and tool calls hang together.
+ * Does nothing extra when Langfuse isn't set up.
+ * Example: traceTurn("ask-copper-turn", { module: 4 }, () => runTheTurn())
+ */
+export function traceTurn<T>(
+  name: string,
+  metadata: Record<string, string | number | boolean>,
+  run: () => Promise<T>,
+): Promise<T> {
+  return startActiveObservation(
+    name,
+    async (span) => {
+      span.update({ metadata });
+      try {
+        return await run();
+      } catch (error) {
+        failSpan(span, error);
+        throw error;
+      }
+    },
+    { asType: "agent" },
+  );
+}
+
 /** Builds the ai_calls row for a call that started at `started`. */
 function rowFor(info: CallInfo, model: ModelId, started: number) {
   return (ok: boolean, usage?: Usage): AiCallRow => {
@@ -101,20 +156,45 @@ async function tracked<T extends { usage: Usage }>(
 ): Promise<T> {
   const model = info.model ?? defaultModel();
   const row = rowFor(info, model, performance.now());
-  try {
-    const result = await run(model);
-    await logCall(row(true, result.usage));
-    return result;
-  } catch (error) {
-    if (!(error instanceof AiNotConfiguredError)) await logCall(row(false));
-    throw error;
-  }
+  return startActiveObservation(
+    info.feature,
+    async (span) => {
+      try {
+        const result = await run(model);
+        const done = row(true, result.usage);
+        span.update({ ...spanDetails(done), output: textOf(result) });
+        await logCall(done);
+        return result;
+      } catch (error) {
+        failSpan(span, error);
+        if (!(error instanceof AiNotConfiguredError)) await logCall(row(false));
+        throw error;
+      }
+    },
+    { asType: "agent" },
+  );
 }
+
+/** The reply text of a result, for the span's output. */
+function textOf(result: object): string | undefined {
+  return "text" in result && typeof result.text === "string"
+    ? result.text
+    : undefined;
+}
+
+/** Tells Langfuse which feature a model call belongs to. */
+const telemetryFor = (info: { feature: string }) => ({
+  functionId: info.feature,
+});
 
 /** Generates text. Example: callText({ module: 3, feature: "support-answer" }, { prompt }) */
 export async function callText(info: CallInfo, options: TextOptions) {
   return tracked(info, (model) =>
-    generateText({ ...options, model: languageModel(model) }),
+    generateText({
+      ...options,
+      model: languageModel(model),
+      telemetry: telemetryFor(info),
+    }),
   );
 }
 
@@ -128,6 +208,7 @@ export async function callObject<Schema extends z.ZodType>(
     generateText({
       ...rest,
       model: languageModel(model),
+      telemetry: telemetryFor(info),
       output: Output.object({ schema }),
     }),
   );
@@ -146,32 +227,41 @@ export async function callEmbedMany(
 ) {
   const started = performance.now();
   // Google doesn't report tokens for embeddings, so tokens and cost are null.
-  const log = (ok: boolean) =>
-    logCall({
-      module: info.module,
-      feature: info.feature,
-      model: EMBEDDING_MODEL,
-      input_tokens: null,
-      output_tokens: null,
-      cost_usd: null,
-      latency_ms: Math.round(performance.now() - started),
-      ok,
-      created_at: new Date().toISOString(),
-    });
-  try {
-    const result = await embedMany({
-      model: google().embedding(EMBEDDING_MODEL.slice("google/".length)),
-      values,
-      providerOptions: {
-        google: { outputDimensionality: EMBEDDING_DIMENSIONS },
-      },
-    });
-    await log(true);
-    return result;
-  } catch (error) {
-    if (!(error instanceof AiNotConfiguredError)) await log(false);
-    throw error;
-  }
+  const row = (ok: boolean): AiCallRow => ({
+    module: info.module,
+    feature: info.feature,
+    model: EMBEDDING_MODEL,
+    input_tokens: null,
+    output_tokens: null,
+    cost_usd: null,
+    latency_ms: Math.round(performance.now() - started),
+    ok,
+    created_at: new Date().toISOString(),
+  });
+  return startActiveObservation(
+    info.feature,
+    async (span) => {
+      try {
+        const result = await embedMany({
+          model: google().embedding(EMBEDDING_MODEL.slice("google/".length)),
+          values,
+          telemetry: telemetryFor(info),
+          providerOptions: {
+            google: { outputDimensionality: EMBEDDING_DIMENSIONS },
+          },
+        });
+        const done = row(true);
+        span.update({ ...spanDetails(done), input: { count: values.length } });
+        await logCall(done);
+        return result;
+      } catch (error) {
+        failSpan(span, error);
+        if (!(error instanceof AiNotConfiguredError)) await logCall(row(false));
+        throw error;
+      }
+    },
+    { asType: "agent" },
+  );
 }
 
 type StreamOptions = DistributiveOmit<
@@ -187,12 +277,33 @@ type StreamOptions = DistributiveOmit<
 export function callStream(info: CallInfo, options: StreamOptions) {
   const model = info.model ?? defaultModel();
   const row = rowFor(info, model, performance.now());
-  return streamText({
-    ...options,
-    model: languageModel(model),
-    onFinish: ({ totalUsage }) => logCall(row(true, totalUsage)),
-    onError: () => logCall(row(false)),
-  });
+  // The span stays open until the stream ends, so it times the whole reply.
+  return startActiveObservation(
+    info.feature,
+    (span) => {
+      const finish = (ok: boolean, usage?: Usage, error?: unknown) => {
+        const done = row(ok, usage);
+        if (ok) span.update(spanDetails(done));
+        else {
+          span.update(spanDetails(done));
+          failSpan(span, error);
+        }
+        span.end();
+        return logCall(done);
+      };
+      return streamText({
+        ...options,
+        model: languageModel(model),
+        telemetry: telemetryFor(info),
+        onFinish: ({ totalUsage, text }) => {
+          span.update({ output: text });
+          return finish(true, totalUsage);
+        },
+        onError: ({ error }) => finish(false, undefined, error),
+      });
+    },
+    { asType: "agent", endOnExit: false },
+  );
 }
 
 // Asking for some thinking (rather than letting the model decide) is what
