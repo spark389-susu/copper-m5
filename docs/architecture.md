@@ -171,3 +171,33 @@ the tests and a golden-set evaluation with an AI judge run in GitHub Actions
 on every pull request, with `main` protected; every AI call is traced in
 Langfuse; and one support agent that does everything is compared with the two
 agents on the same golden set. Langfuse is the only eval and monitoring tool.
+
+## Module 5: Langfuse tracing
+
+**Summary:** Every AI call is traced in Langfuse, so each agent turn shows its
+model calls, tool calls, tokens, cost and how long it took. Tracing turns on
+only when `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set (plus
+`LANGFUSE_BASE_URL` for your region); without them the app runs as before and
+the `[ai_calls]` terminal line is still printed.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Startup | `instrumentation.ts`, `lib/ai/langfuse.ts` | Next.js runs `register()` once at server start. It starts OpenTelemetry with the Langfuse span processor and registers the AI SDK's `OpenTelemetry` integration, so each model call, step and tool run becomes a span |
+| One span per call | `lib/ai/call.ts` | `callText`, `callObject`, `callStream` and `callEmbedMany` each wrap the call in a Langfuse span named after its `feature`, carrying `module`, `model`, input and output tokens, `cost_usd` (from `lib/ai/pricing.ts`) and `latency_ms`. A failed call is marked as an error. A stream's span stays open until the reply ends |
+| One trace per turn | `traceTurn` in `lib/ai/call.ts`, used in `ask.ts` | A whole Ask Copper turn is one trace (`ask-copper-turn`): Copper's call, the handoff, the Refund agent's call and every tool call hang under it, so the two agents can be compared in one place |
+
+**Data flow:** question → `askCopper` opens the `ask-copper-turn` trace → each
+agent's `callStream` opens its own span → the AI SDK adds the model call and
+tool calls inside it → spans are sent to Langfuse as they finish.
+
+**Decisions and trade-offs:** The wrapping lives in `lib/ai/call.ts`, the one
+file every model call already goes through, so no feature has to remember to
+trace. Cost is also computed in the app and put on each span's metadata;
+Langfuse's own cost column uses its model price table, so if a Gemini model is
+missing there, add it under Settings > Models in Langfuse. Spans are sent
+right away (not batched) so traces show up within seconds.
+
+**Risks and open questions:** Prompts and replies are sent to Langfuse, so
+don't put customer secrets in them. Scripts that exit right after a call
+(`embed-docs`) don't start tracing. Tests use an in-memory exporter
+(`tests/langfuse.test.ts`), never the real Langfuse.
