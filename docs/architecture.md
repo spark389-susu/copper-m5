@@ -238,3 +238,20 @@ questions is a small sample, and one run can differ from the next, so compare
 runs in Langfuse before trusting a small change. Expected answers that depend
 on data (stock, prices) must be updated when `lib/copper/data/` changes. The
 free Gemini key's rate limit is why questions run two at a time.
+
+## Module 5: Checks on every pull request
+
+**Summary:** Two GitHub Actions workflows check every pull request. `ci.yml`
+runs lint, typecheck, the tests and the build on Linux, macOS and Windows.
+`eval.yml` runs `npm run eval` (the golden set, marked by the AI judge, scored
+in Langfuse) on Linux and fails when fewer than 75% of the answers pass.
+
+**Setup:** the eval needs four repository secrets: `GOOGLE_GENERATIVE_AI_API_KEY`,
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL`. To block
+merges, turn on branch protection for `main`: require a pull request and make
+the `check` and `eval` jobs required status checks.
+
+**Risks and open questions:** The eval calls real models, so each run costs a
+little and can be flaky; the 75% bar leaves room for that. Pull requests from
+forks get no secrets, so the eval can't run for them. Pushes to a branch with
+no pull request run `ci.yml` but not the eval.
