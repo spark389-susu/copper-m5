@@ -201,3 +201,40 @@ right away (not batched) so traces show up within seconds.
 don't put customer secrets in them. Scripts that exit right after a call
 (`embed-docs`) don't start tracing. Tests use an in-memory exporter
 (`tests/langfuse.test.ts`), never the real Langfuse.
+
+## Module 5: AI judge and golden set
+
+**Summary:** `npm run eval` asks Ask Copper every question in a golden set,
+has an AI judge (Gemini) mark each answer, and saves the answers, traces and
+scores in Langfuse as one run of the dataset `copper-golden-set`. It needs
+`GOOGLE_GENERATIVE_AI_API_KEY` and the Langfuse keys, and it fails when fewer
+than 75% of the answers pass (change it with `EVAL_MIN_PASS_RATE`), so it can
+later block a pull request.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Golden set | `lib/evals/golden-set.ts` | 13 questions with what a correct answer says or does: products, stock, cost, document answers with citations, refunds under and over the limit, a refund prompt-injection, a request for internal documents, an off-topic request and an unknown product |
+| Asking Copper | `lib/evals/run-ask-copper.ts` | Calls `askCopper` the way the chat panel does and waits for the finished answer, with its tool calls. Refund questions go through the Support page's desk (the $50 limit) so the Refund agent can answer |
+| The judge | `lib/evals/judge.ts` | Gemini, through `callObject` in `lib/ai/call.ts`, reads the question, the expected answer, the tool results and the reply, then marks correctness, groundedness, safety and tone (1 to 5) and says whether the answer passed. The judge's own call is traced like any other |
+| Scores in Langfuse | `evals/ask-copper.eval.ts` | Uploads the golden set as a dataset, runs an experiment on it, and stores for each answer: `correctness`, `groundedness`, `safety`, `tone` (0 to 1), `used_expected_tools` and `passed` (yes or no), plus the run's `pass_rate`. Each score sits on the answer's trace |
+| Judge check | `evals/judge.eval.ts` | Gives the judge deliberately bad answers (wrong facts, a leaked playbook, a refund promised when the app said no) and expects every one to fail, so a judge that passes everything gets caught |
+
+**Data flow:** golden question → `askCopper` (Copper, maybe the Refund agent) →
+reply and tool calls → the judge marks it → scores attach to that answer's
+trace in Langfuse → the run's pass rate decides pass or fail.
+
+**Decisions and trade-offs:** The judge runs in the app through `lib/ai/call.ts`
+(as every AI call must) and sends only its scores to Langfuse, so the Langfuse
+project needs no Google key and the judge's prompt lives in code, where it can
+be reviewed. Langfuse can also run its own judge from its settings
+(Evaluators); that needs a Gemini key stored in Langfuse, so it isn't used
+here. Whether the right tools were called is checked in code, not by the judge,
+because that is a plain yes or no. `npm run eval` calls real models, so it is
+not part of `npm test`.
+
+**Risks and open questions:** The judge is a model and can be wrong or lenient;
+`evals/judge.eval.ts` only checks it catches obvious failures. Thirteen
+questions is a small sample, and one run can differ from the next, so compare
+runs in Langfuse before trusting a small change. Expected answers that depend
+on data (stock, prices) must be updated when `lib/copper/data/` changes. The
+free Gemini key's rate limit is why questions run two at a time.
