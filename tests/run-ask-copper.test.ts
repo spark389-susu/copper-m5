@@ -47,6 +47,7 @@ describe("runAskCopper", () => {
     expect(asked).toHaveBeenCalledWith(
       expect.objectContaining({
         useTools: true,
+        setup: "two-agents",
         desk: { limitUsd: 50, refunds: [] },
       }),
     );
