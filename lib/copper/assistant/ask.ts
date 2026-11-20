@@ -16,6 +16,7 @@ import {
   COPPER_HANDOFF,
   COPPER_INSTRUCTIONS,
   REFUND_AGENT_INSTRUCTIONS,
+  SINGLE_AGENT_INSTRUCTIONS,
 } from "@/lib/copper/assistant/instructions";
 import type {
   Agent,
@@ -31,6 +32,13 @@ import type { Desk } from "@/lib/copper/orders";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
+/**
+ * How the Support page is staffed. "two-agents" (the default) is Copper plus
+ * the Refund agent. "single" is one agent with every tool and no handoffs,
+ * used to compare the two setups (Module 5).
+ */
+export type Setup = "two-agents" | "single";
+
 export type AskCopperRequest = {
   messages: ChatMessage[];
   useTools: boolean;
@@ -38,6 +46,8 @@ export type AskCopperRequest = {
   desk?: Desk;
   /** Who answers first: whoever ended the last turn. Copper by default. */
   agent?: Agent;
+  /** One agent or two. Two by default; "single" only matters with a desk. */
+  setup?: Setup;
 };
 
 export type AskCopperResult = { progress: Live<Progress> };
@@ -62,6 +72,21 @@ const STOP = [
 const SORRY = "Sorry, something went wrong on my end. Please try again.";
 
 /** One agent's call: its instructions and only its own tools. */
+/** The one-agent setup: Copper's and the Refund agent's tools, no handoffs. */
+function singleAgentCall(messages: ChatMessage[], desk: Desk) {
+  const { get_orders, request_refund } = refundAgentTools(desk);
+  return callStream(
+    { module: 5, feature: "single-agent" },
+    {
+      messages,
+      providerOptions: THOUGHT_SUMMARIES,
+      instructions: SINGLE_AGENT_INSTRUCTIONS,
+      tools: { ...copperTools, get_orders, request_refund },
+      stopWhen: stepCountIs(MAX_STEPS),
+    },
+  );
+}
+
 function agentCall(agent: Agent, messages: ChatMessage[], desk?: Desk) {
   if (agent === "refund" && desk)
     return callStream(
@@ -95,6 +120,7 @@ export async function askCopper({
   useTools,
   desk,
   agent = "copper",
+  setup = "two-agents",
 }: AskCopperRequest): Promise<AskCopperResult> {
   const { live, update, done } = createLive<Progress>();
   const first: Agent = desk && useTools ? agent : "copper";
@@ -197,7 +223,13 @@ export async function askCopper({
     try {
       await traceTurn(
         "ask-copper-turn",
-        { module: 4, useTools, support: Boolean(desk), firstAgent: first },
+        {
+          module: 4,
+          useTools,
+          support: Boolean(desk),
+          firstAgent: first,
+          setup,
+        },
         async () => {
           if (!useTools) {
             // Without tools, send no instructions either: "always use your
@@ -209,6 +241,10 @@ export async function askCopper({
                 { messages, providerOptions: THOUGHT_SUMMARIES },
               ),
             );
+            return;
+          }
+          if (setup === "single" && desk) {
+            await follow("copper", singleAgentCall(messages, desk));
             return;
           }
           let current = first;

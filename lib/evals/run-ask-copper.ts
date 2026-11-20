@@ -1,4 +1,4 @@
-import { askCopper } from "@/lib/copper/assistant/ask";
+import { askCopper, type Setup } from "@/lib/copper/assistant/ask";
 import { type Agent, toolCallsOf } from "@/lib/copper/assistant/progress";
 import { DEFAULT_LIMIT_USD } from "@/lib/copper/orders";
 import type { GoldenItem } from "@/lib/evals/golden-set";
@@ -19,10 +19,12 @@ export type AskCopperOutput = {
  */
 export async function runAskCopper(
   item: Pick<GoldenItem, "question" | "support">,
+  setup: Setup = "two-agents",
 ): Promise<AskCopperOutput> {
   const { progress } = await askCopper({
     messages: [{ role: "user", content: item.question }],
     useTools: true,
+    setup,
     desk: item.support
       ? { limitUsd: DEFAULT_LIMIT_USD, refunds: [] }
       : undefined,

@@ -255,3 +255,9 @@ the `check` and `eval` jobs required status checks.
 little and can be flaky; the 75% bar leaves room for that. Pull requests from
 forks get no secrets, so the eval can't run for them. Pushes to a branch with
 no pull request run `ci.yml` but not the eval.
+
+## Module 5: One agent vs two agents
+
+`askCopper` takes a `setup`: `"two-agents"` (the default: Copper hands refunds to the Refund agent) or `"single"` (`singleAgentCall` in `lib/copper/assistant/ask.ts`: one agent with Copper's tools plus `get_orders` and `request_refund`, `SINGLE_AGENT_INSTRUCTIONS`, no handoffs; its calls are traced as `single-agent`). The app itself always uses two agents; `single` exists for the comparison.
+
+`npm run eval:compare` (`evals/compare-agents.compare.ts`) runs the whole golden set on each setup and saves two runs of the `copper-golden-set` dataset in Langfuse ("Ask Copper: two agents" and "Ask Copper: single agent"), with the same AI judge. Open Datasets > copper-golden-set > Runs and tick both runs to compare their scores, cost and latency side by side. Handoff tools are not expected from the single agent (`lib/evals/compare.ts`). It calls real models twice over, so it is not part of the pull-request checks.
