@@ -33,6 +33,10 @@ const output: AskCopperOutput = {
   toolCalls: [
     { name: "get_products", input: {}, output: { products: ["copper-home"] } },
   ],
+  costUsd: 0.0004,
+  latencyMs: 1200,
+  modelCalls: 2,
+  tokens: 900,
 };
 
 function replyWithJson(json: unknown) {
