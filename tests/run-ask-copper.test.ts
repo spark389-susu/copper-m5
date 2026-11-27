@@ -32,7 +32,7 @@ describe("runAskCopper", () => {
       agent: "refund",
     });
 
-    expect(await pending).toEqual({
+    expect(await pending).toMatchObject({
       reply: "Refunded $7.99.",
       status: "done",
       agent: "refund",

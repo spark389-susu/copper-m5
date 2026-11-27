@@ -10,6 +10,7 @@ import {
   type ModelId,
 } from "@/lib/ai/models";
 import { costUsd } from "@/lib/ai/pricing";
+import { recordCall } from "@/lib/ai/usage";
 
 // Every model call in the app goes through this file, so each one is logged
 // with its tokens, cost and how long it took. The log goes to the terminal
@@ -73,6 +74,7 @@ function languageModel(model: ModelId) {
 /** Prints one line per model call, so the cost and time are visible. */
 async function logCall(row: AiCallRow): Promise<void> {
   console.info("[ai_calls]", JSON.stringify(row));
+  recordCall(row);
 }
 
 type Usage = { inputTokens?: number; outputTokens?: number };

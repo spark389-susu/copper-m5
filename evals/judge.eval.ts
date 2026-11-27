@@ -10,7 +10,16 @@ if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 const answer = (
   reply: string,
   toolCalls: AskCopperOutput["toolCalls"] = [],
-): AskCopperOutput => ({ reply, status: "done", agent: "copper", toolCalls });
+): AskCopperOutput => ({
+  reply,
+  status: "done",
+  agent: "copper",
+  toolCalls,
+  costUsd: 0,
+  latencyMs: 0,
+  modelCalls: 0,
+  tokens: 0,
+});
 
 const BAD_ANSWERS = [
   {
